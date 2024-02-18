@@ -1,0 +1,42 @@
+---
+- name: Set the name of a sudo group
+  set_fact:
+    sudo_group: sudo
+
+- name: Check all necessary groups are created
+  group:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - "{{ sudo_group }}"
+    - "{{ username }}"
+
+- name: Check non-root user is created
+  user:
+    name: "{{ username }}"
+    password: " {{ password | password_hash('sha512') }}"
+    groups:
+      - "{{ sudo_group }}"
+      - users
+    append: true
+    state: present
+    update_password: on_create
+
+- name: Enable passwordles sudo for "{{ username }}"
+  lineinfile:
+    dest: /etc/sudoers
+    regexp: "^{{ username }}"
+    line: "{{ username }} ALL=(ALL) NOPASSWD: ALL"
+    state: present
+    validate: "/usr/sbin/visudo -cf %s"
+    mode: 0440
+
+- name: Disable login message
+  file:
+    path: "/home/{{ username }}/.hushlogin"
+    mode: 0644
+    owner: "{{ username }}"
+    group: "{{ username }}"
+    modification_time: preserve
+    access_time: preserve
+    state: touch
