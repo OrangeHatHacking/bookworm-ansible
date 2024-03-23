@@ -1,0 +1,118 @@
+ChatGPT did this:
+---
+- name: Install Docker and deploy services
+  hosts: all
+  become: true
+  vars:
+    docker_network_name: my_network
+    services:
+      - name: portainer
+        image: portainer/portainer
+        ports:
+          - "9000:9000"
+      - name: authentik
+        image: authentik/authentik
+        ports:
+          - "8080:80"
+      - name: vaultwarden
+        image: vaultwarden/server
+      - name: nginx_proxy_manager
+        image: jlesage/nginx-proxy-manager
+        ports:
+          - "81:80"
+          - "444:443"
+      - name: seafile
+        image: seafileltd/seafile:latest
+        ports:
+          - "8000:8000"
+          - "8082:8082"
+          - "10001:10001"
+  tasks:
+    - name: Add Docker APT repository key
+      apt_key:
+        url: https://download.docker.com/linux/debian/gpg
+        state: present
+
+    - name: Add Docker APT repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/debian bullseye stable
+        state: present
+
+    - name: Install dependencies
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg
+        - lsb-release
+        - python3-requests
+
+    - name: Update APT package cache
+      apt:
+        update_cache: yes
+
+    - name: Install Docker
+      apt:
+        name: docker-ce
+        state: present
+
+    - name: Ensure Docker service is started
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create Docker network
+      docker_network:
+        name: "{{ docker_network_name }}"
+        state: present
+
+    - name: Pull Docker images
+      docker_image:
+        name: "{{ item.image }}"
+      with_items: "{{ services }}"
+
+    - name: Deploy services
+      docker_container:
+        name: "{{ item.name }}"
+        image: "{{ item.image }}"
+        state: started
+        restart_policy: always
+        network_mode: "{{ docker_network_name }}"
+        ports: "{{ item.ports | default([]) }}"
+      with_items: "{{ services }}"
+
+    - name: Retrieve Nginx Proxy Manager container ID
+      shell: docker ps -q --filter name=nginx_proxy_manager
+      register: nginx_proxy_manager_container_id
+
+    - name: Wait for Nginx Proxy Manager to start
+      wait_for:
+        host: localhost
+        port: 81
+        delay: 5
+        timeout: 60
+      delegate_to: localhost
+
+    - name: Add Docker containers to Nginx Proxy Manager
+      uri:
+        url: "http://localhost:81/api/proxy/host"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+          Authorization: "Bearer YOUR_NGINX_PROXY_MANAGER_API_TOKEN"
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          scheme: "http"
+          host: "{{ item.name }}.thegindash.com"
+          port: "{{ item.ports.0.split(':')[0] }}"
+          location: "/"
+          enforce_https: true
+          preserve_host_header: true
+        status_code: 200
+      with_items: "{{ services }}"
+      when: nginx_proxy_manager_container_id.stdout != ""
